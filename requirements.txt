@@ -1,0 +1,7 @@
+faker
+kafka-python
+python-dotenv
+pandas
+numpy
+scikit-learn
+joblib

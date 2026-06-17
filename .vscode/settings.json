@@ -1,0 +1,13 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+  "python.languageServer": "Pylance",
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.useLibraryCodeForTypes": true,
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    ".venv": true,
+    "data": true,
+    "model": true
+  }
+}

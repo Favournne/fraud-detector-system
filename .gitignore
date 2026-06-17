@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.db
+*.db-journal
+*.csv
+data/
+feature_repository/data/
+.streamlit/
