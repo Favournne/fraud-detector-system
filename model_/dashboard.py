@@ -14,10 +14,11 @@ import streamlit as st
 # =====================================================================
 # CONFIGURATION
 # =====================================================================
-DB_PATH = "fraud_events.db"
+DB_PATH = r"C:\Users\USER\fraud_project\model_\fraud_events.db"
 TOPIC_NAME = "raw_transactions"
 REFRESH_SECONDS = 2
 
+print(f"!!! DASHBOARD READING FROM: {os.path.abspath(DB_PATH)}")
 fake = Faker(["en_NG"])
 
 st.set_page_config(
@@ -29,7 +30,6 @@ try:
     conn = sqlite3.connect(DB_PATH)
     db_path = os.path.abspath(DB_PATH)
     print(f"\nDashboard is reading DB file from: {db_path}")
-
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(events);")
     columns = [row[1] for row in cursor.fetchall()]
@@ -38,30 +38,75 @@ try:
 except Exception as e:
     print(f"Diagnostic check skipped or failed: {e}")
 
-st.markdown(
-    """
+# --- GLOBAL STYLES ---
+st.markdown("""
     <style>
-    .stApp { background-color: #FFFFFF; color: #1F2937; }
-    h1, h2, h3, h4 { color: #1E3A8A !important; font-family: 'Inter', sans-serif; font-weight: bold; }
-    .stMetric {
+    .stApp {
+        background-color: #FFFFFF;
+        color: #1F2937;
+    }
+    h1, h2, h3, h4 {
+        color: #1E3A8A !important;
+        font-family: 'Inter', sans-serif;
+        font-weight: bold;
+    }
+    
+    /* CUSTOM CARD BOXES FOR THE INFORMATION */
+    .kpi-card {
         background-color: #F3F4F6;
         padding: 20px;
         border-radius: 12px;
         border-left: 6px solid #7C3AED;
+        font-family: 'Inter', sans-serif;
     }
-    div[data-testid="stMetricValue"] { color: #1E3A8A; font-family: monospace; font-weight: bold; }
-    </style>
-""",
-    unsafe_allow_html=True,
-)
+    .kpi-label {
+        color: #7C3AED !important;
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 5px;
+    }
+    .kpi-value {
+        color: #7C3AED !important;
+        font-size: 28px;
+        font-family: monospace;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    .kpi-delta {
+        color: #4C1D95 !important;
+        font-size: 14px;
+        font-weight: bold;
+    }
 
+    /* BUTTONS FIX */
+    div[data-testid="stButton"] button {
+        color: #7C3AED !important;
+        border: 2px solid #7C3AED !important;
+        background-color: #FFFFFF !important;
+        font-weight: bold !important;
+    }
+    div[data-testid="stButton"] button p {
+        color: #7C3AED !important;
+        font-weight: bold !important;
+    }
+    div[data-testid="stButton"] button:hover {
+        border-color: #1E3A8A !important;
+        color: #1E3A8A !important;
+        background-color: #F3F4F6 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# =====================================================================
+# DASHBOARD HEADERS
+# =====================================================================
 st.title("FinCrime Real-Time Detection Monitor")
 st.markdown("### Production Streaming Telemetry & Model Evaluation Ledger")
 st.markdown("---")
 
 
 # =====================================================================
-# KAFKA PRODUCER (for attack injection buttons)
+# KAFKA PRODUCER
 # =====================================================================
 @st.cache_resource
 def get_producer():
@@ -79,7 +124,7 @@ producer = get_producer()
 
 
 # =====================================================================
-# DATA ACCESS — reads model verdicts logged by kafka_consumer.py
+# DATA ACCESS
 # =====================================================================
 def load_events(limit=15):
     try:
@@ -88,29 +133,17 @@ def load_events(limit=15):
             f"SELECT * FROM events ORDER BY id DESC LIMIT {limit}", conn
         )
         conn.close()
-
-        # Dynamic fallback: If schema is outdated or empty, ensure the column exists
         if not df.empty and "anomaly_score" not in df.columns:
             df["anomaly_score"] = 0.0
         if "account_id" not in df.columns and "account_number" in df.columns:
-                df = df.rename(columns={"account_number": "account_id"})
-
+            df = df.rename(columns={"account_number": "account_id"})
         return df
     except Exception:
-        return pd.DataFrame(
-            columns=[
-                "id",
-                "timestamp",
-                "transaction_id",
-                "account_id",
-                "amount",
-                "channel",
-                "location",
-                "is_anomaly",
-                "anomaly_score",
-                "action_required",
-            ]
-        )
+        return pd.DataFrame(columns=[
+            "id", "timestamp", "transaction_id", "account_id",
+            "amount", "channel", "location", "is_anomaly",
+            "anomaly_score", "action_required",
+        ])
 
 
 def load_totals():
@@ -123,8 +156,7 @@ def load_totals():
         saved = (
             conn.execute(
                 "SELECT SUM(amount) FROM events WHERE is_anomaly = 1"
-            ).fetchone()[0]
-            or 0.0
+            ).fetchone()[0] or 0.0
         )
         conn.close()
         return total, flagged, saved
@@ -197,7 +229,7 @@ def send_attack(payload_fn, label):
 
 
 # =====================================================================
-# KPI ROW
+# KPI ROW (FIXED INFRASTRUCTURE USING MARKDOWN)
 # =====================================================================
 total_monitored, total_flagged, total_saved = load_totals()
 deflection_rate = (
@@ -205,13 +237,33 @@ deflection_rate = (
 )
 
 m_col1, m_col2, m_col3 = st.columns(3)
-m_col1.metric("Total Transactions Audited", f"{total_monitored:,}")
-m_col2.metric(
-    "Model Deflections",
-    f"{total_flagged:,} Threats",
-    f"{deflection_rate:.1f}% deflection rate",
-)
-m_col3.metric("Preserved Ecosystem Capital", f"₦{total_saved:,.2f}")
+
+with m_col1:
+    st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Total Transactions Audited</div>
+            <div class="kpi-value">{total_monitored:,}</div>
+            <div class="kpi-delta">&nbsp;</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+with m_col2:
+    st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Model Deflections</div>
+            <div class="kpi-value">{total_flagged:,} Threats</div>
+            <div class="kpi-delta">▲ {deflection_rate:.1f}% deflection rate</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+with m_col3:
+    st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Preserved Ecosystem Capital</div>
+            <div class="kpi-value">₦{total_saved:,.2f}</div>
+            <div class="kpi-delta">&nbsp;</div>
+        </div>
+    """, unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -243,7 +295,6 @@ st.markdown("---")
 # =====================================================================
 st.subheader("Real-Time Production Transaction Stream")
 
-# df is defined here correctly now
 df = load_events(limit=15)
 
 if df.empty:
@@ -252,48 +303,35 @@ if df.empty:
         "Make sure kafka_consumer.py is running and the simulator is streaming."
     )
 else:
-    display_df = df[
-        [
-            "timestamp",
-            "transaction_id",
-            "account_id",
-            "amount",
-            "channel",
-            "location",
-            "anomaly_score",
-            "action_required",
-            "is_anomaly",
-        ]
-    ].copy()
+    ticker_cols = [
+        "timestamp", "transaction_id", "account_id",
+        "amount", "channel", "location", "action_required", "is_anomaly"
+    ]
+    # Only select columns that actually exist in the DB
+    available = [c for c in ticker_cols if c in df.columns]
+    display_df = df[available].copy()
 
-    display_df = display_df.rename(
-        columns={
-            "timestamp": "Timestamp",
-            "transaction_id": "Transaction ID",
-            "account_id": "Account ID",
-            "amount": "Amount",
-            "channel": "Channel",
-            "location": "Location",
-            "anomaly_score": "Anomaly Score",
-            "action_required": "Action",
-            "is_anomaly": "_flag",
-        }
-    )
+    display_df = display_df.rename(columns={
+        "timestamp": "Timestamp",
+        "transaction_id": "Transaction ID",
+        "account_id": "Account ID",
+        "amount": "Amount",
+        "channel": "Channel",
+        "location": "Location",
+        "action_required": "Action",
+        "is_anomaly": "_flag",
+    })
 
-    display_df["Status"] = display_df["_flag"].map(
-        {1: "BLOCKED", 0: "APPROVED"}
-    )
+    display_df["Status"] = display_df["_flag"].map({1: "BLOCKED", 0: "APPROVED"})
     display_df = display_df.drop(columns=["_flag"])
 
     def highlight_fraud_rows(row):
         if "BLOCKED" in str(row["Status"]):
-            return [
-                "background-color: #FEE2E2; color: #991B1B; font-weight: bold;"
-            ] * len(row)
+            return ["background-color: #FEE2E2; color: #991B1B; font-weight: bold;"] * len(row)
         return ["background-color: #FFFFFF; color: #1F2937;"] * len(row)
 
     styled_df = display_df.style.apply(highlight_fraud_rows, axis=1).format(
-        {"Amount": "₦{:,.2f}", "Anomaly Score": "{:.4f}"}
+        {"Amount": "₦{:,.2f}"}
     )
 
     st.dataframe(styled_df, use_container_width=True, hide_index=True)

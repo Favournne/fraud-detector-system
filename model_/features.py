@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.model_selection import KFold
+from datetime import timedelta 
+from feast import Entity, FeatureView, Field, ValueType
 
 class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
     """
@@ -109,3 +111,5 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
             'unique_dest_banks_1h', 'accounts_per_device_24h'
         ]
         return df[model_ready_features].copy()
+    
+    account = Entity(name="account_id")
