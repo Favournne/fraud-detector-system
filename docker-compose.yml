@@ -22,15 +22,14 @@ services:
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
   redis:
-    image: redis:7.0-alpine
-    container_name: redis_cache
+    image: redis:alpine
+    container_name: fraud_redis
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
-    networks:
-      - kafka-network
+      - redis_data:/data  # Link the container directory to the global volume
     restart: always
 
-  volumes:
+#   CORRECT STRUCTURE: Move volumes out of the services block
+volumes:
   redis_data:

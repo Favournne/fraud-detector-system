@@ -67,27 +67,33 @@ class NigerianTransactionSimulator:
         return round(random.uniform(200, profile["avg_amount"] * 5.0), 2)
 
     def _evaluate_fraud_rules(self, profile: dict, channel: str, amount: float, state: str, tx_time: datetime, is_known_device: bool) -> int:
+        """Evaluates baseline behavioral anomalies with realistic, subtler thresholds."""
         is_night = tx_time.hour in [0, 1, 2, 3, 4]
-
-        # Scenario A: Late night high-value USSD drain
-        if channel == "USSD Code (*737#)" and amount > 100000 and is_night:
-            return 1 if random.random() < 0.75 else 0
-
-        # Scenario B: Behavioral Anomaly on POS
+        is_evening = tx_time.hour in [20, 21, 22, 23]
+        
+        # Scenario A: USSD drain — lowered from >100k fixed to >2x avg, evening OR night
+        if channel == "USSD Code (*737#)" and amount > (profile["avg_amount"] * 2) and (is_night or is_evening):
+            return 1 if random.random() < 0.60 else 0  
+        
+        # Scenario B: POS anomaly — Fixed indentation so sum() stays local to POS context
         if channel == "POS":
-            amount_spike = amount > (profile["avg_amount"] * 10)
+            amount_spike = amount > (profile["avg_amount"] * 4)
             time_unusual = tx_time.hour not in profile["active_hours"]
             location_changed = state != profile["home_state"]
-            if sum([amount_spike, time_unusual, location_changed]) >= 2:
-                return 1 if random.random() < 0.65 else 0
-
-        # Scenario C: Unknown Device on Mobile App/Web
+            if sum([amount_spike, time_unusual, location_changed]) >= 1:
+                return 1 if random.random() < 0.45 else 0
+        
+        # Scenario C: Unknown device — Fixed indentation so sum() stays local to Digital context
         if channel in ["Mobile App", "Web (Paystack)"] and not is_known_device:
-            amount_spike = amount > (profile["avg_amount"] * 8)
+            amount_spike = amount > (profile["avg_amount"] * 3)
             time_unusual = tx_time.hour not in profile["active_hours"]
             if sum([amount_spike, time_unusual]) >= 1:
-                return 1 if random.random() < 0.85 else 0
-
+                return 1 if random.random() < 0.70 else 0
+        
+        # Scenario D: Large ATM withdrawal outside active hours
+        if channel == "ATM" and amount > (profile["avg_amount"] * 5) and tx_time.hour not in profile["active_hours"]:
+            return 1 if random.random() < 0.50 else 0
+        
         return 0
 
     def generate_dataset(self, filename: str, num_records: int, stream_live: bool = True):
@@ -137,17 +143,17 @@ class NigerianTransactionSimulator:
                     is_fraud = 1
                     channel = "Mobile App"
                     device_id = random.choice(self.active_rogue_devices)
-                    amount = round(random.uniform(profile["avg_amount"] * 3, profile["avg_amount"] * 15), 2)
+                    amount = round(random.uniform(profile["avg_amount"] * 1.5, profile["avg_amount"] * 4), 2)
                     tx_type = "Debit" if random.random() < 0.85 else "Credit"
 
                 # --- INJECTION PATTERN 2: High Out-Degree Bank Layering ---
                 if i > 5000 and i % 401 == 0:
                     is_fraud = 1
                     channel = random.choice(["Mobile App", "Web (Paystack)"])
-                    amount = round(random.uniform(profile["avg_amount"] * 4, profile["avg_amount"] * 20), 2)
+                    amount = round(random.uniform(profile["avg_amount"] * 2, profile["avg_amount"] * 6), 2)
                     tx_type = "Debit" if random.random() < 0.85 else "Credit"
                     state = random.choices(self.states, weights=self.state_weights, k=1)[0]
-
+                
                 narration_str = random.choice(self.narrations)
                 tx_id = f"TXN-{random.randint(1000000000, 9999999999)}"
 
@@ -167,7 +173,6 @@ class NigerianTransactionSimulator:
                 ]
                 writer.writerow(record)
                 
-
                 api_compatible_payload = {
                     "TransactionID": tx_id,
                     "AccountID": f"ACC_{account_number}",
@@ -193,5 +198,5 @@ class NigerianTransactionSimulator:
 
 
 if __name__ == "__main__":
-    simulator = NigerianTransactionSimulator(num_customers=500)
+    simulator = NigerianTransactionSimulator(num_customers=1000)
     simulator.generate_dataset("nigerian_bank_transactions_live.csv", num_records=2000, stream_live=True)
