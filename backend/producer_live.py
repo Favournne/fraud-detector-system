@@ -5,6 +5,7 @@ import random
 import numpy as np
 import pandas as pd
 from kafka import KafkaProducer
+import os
 
 producer = KafkaProducer(
     bootstrap_servers='localhost:9092',
@@ -12,7 +13,7 @@ producer = KafkaProducer(
 )
 
 # 1. Load the ORIGINAL dataset to learn distributions
-df = pd.read_csv(r"../data_/paysim.csv")  # adjust path if needed
+df = pd.read_csv(r"data_/paysim.csv")   
 
 # 2. Filter to only the types your model accepts (TRANSFER/CASH_OUT)
 df_sample = df[df['type'].isin(['TRANSFER', 'CASH_OUT'])]

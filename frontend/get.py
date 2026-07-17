@@ -81,3 +81,4 @@ if submitted:
             st.error("Could not connect to FastAPI. Make sure it's running on port 8000.")
         except Exception as e:
             st.error(f"An error occurred: {e}")
+            #streamlit run get.py --server.port 8502
