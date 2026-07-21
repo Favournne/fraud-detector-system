@@ -1,33 +1,31 @@
 import os
 from dotenv import load_dotenv
 
- #Load .env from the project root (two levels up from this file)
+# Load .env from the project root
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
 load_dotenv(dotenv_path)
- # Must be before any os.environ access
 
 import joblib
 import pandas as pd
 import numpy as np
 import json
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 import redis
 import psycopg2
 import psycopg2.extras
 from confluent_kafka import Producer
 import shap
 
-# =============================================
 # 1. Configuration from environment
-# =============================================
+print("Loading main.py from:", os.path.abspath(__file__))
 
 DB_CONFIG = {
     "host": os.getenv("POSTGRES_HOST", "localhost"),
     "port": int(os.getenv("POSTGRES_PORT", "5432")),
     "database": os.getenv("POSTGRES_DB", "fraud_stream_db"),
     "user": os.getenv("POSTGRES_USER", "fraud_user"),
-    "password": os.environ["POSTGRES_PASSWORD"]   # MUST be set in .env
+    "password": os.environ["POSTGRES_PASSWORD"]
 }
 
 REDIS_CONFIG = {
@@ -39,9 +37,9 @@ REDIS_CONFIG = {
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
 
-# =============================================
+
 # 2. Kafka Producer
-# =============================================
+
 producer_conf = {
     'bootstrap.servers': KAFKA_BROKER,
     'client.id': 'fastapi-producer'
@@ -50,69 +48,69 @@ kafka_producer = Producer(producer_conf)
 
 def delivery_report(err, msg):
     if err:
-        print(f"❌ Kafka delivery failed: {err}")
+        print(f"Kafka delivery failed: {err}")
     else:
-        print(f"✅ Kafka delivered to {msg.topic()}")
+        print(f"Kafka delivered to {msg.topic()}")
 
-# =============================================
+
 # 3. FastAPI App
-# =============================================
+
 main = FastAPI(title="Paysim Fraud Detection API", version="2.0.0")
 
-# =============================================
+
 # 4. Load model, scaler, threshold, SHAP
-# =============================================
+
 BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data_")
 model = joblib.load(os.path.join(BASE_DIR, "fraud_model.pkl"))
 scaler = joblib.load(os.path.join(BASE_DIR, "scaler.pkl"))
 with open(os.path.join(BASE_DIR, "threshold.json")) as f:
     THRESHOLD = json.load(f)["threshold"]
 n_features = scaler.n_features_in_ if hasattr(scaler, "n_features_in_") else 5
-print(f"✅ Model loaded. Threshold: {THRESHOLD} | Features: {n_features}")
+print(f"Model loaded. Threshold: {THRESHOLD} | Features: {n_features}")
 
 try:
     explainer = shap.TreeExplainer(model)
-    print("✅ SHAP explainer loaded.")
+    print("SHAP explainer loaded.")
 except Exception as e:
-    print(f"⚠️ SHAP explainer error: {e}")
+    print(f"SHAP explainer error: {e}")
     explainer = None
 
-# =============================================
-# 5. Redis Connection (single, env-based)
-# =============================================
+
+# 5. Redis Connection
+
 r = None
 try:
     r = redis.Redis(**REDIS_CONFIG)
     r.ping()
-    print("✅ Connected to Redis.")
+    print("Connected to Redis.")
 except Exception as e:
-    print(f"⚠️ Redis unavailable: {e}")
+    print(f"Redis unavailable: {e}")
 
-# =============================================
-# 6. Database Schema Migration
-# =============================================
+#  Database Schema Migration
+
 @main.on_event("startup")
 def setup_database():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cur = conn.cursor()
+        # Add columns if they don't exist
         cur.execute("""
             ALTER TABLE predictions 
             ADD COLUMN IF NOT EXISTS oldbalanceorg NUMERIC,
             ADD COLUMN IF NOT EXISTS oldbalancedest NUMERIC,
             ADD COLUMN IF NOT EXISTS step INTEGER,
-            ADD COLUMN IF NOT EXISTS transaction_type VARCHAR(20);
+            ADD COLUMN IF NOT EXISTS transaction_type VARCHAR(20),
+            ADD COLUMN IF NOT EXISTS velocity_1m INTEGER,
+            ADD COLUMN IF NOT EXISTS avg_amount_1h NUMERIC
         """)
         conn.commit()
         cur.close()
         conn.close()
-        print("✅ Database schema up to date.")
+        print("Database schema up to date.")
     except Exception as e:
-        print(f"⚠️ DB schema update failed: {e}")
+        print(f"DB schema update failed: {e}")
 
-# =============================================
-# 7. Pydantic Payload
-# =============================================
+# Pydantic Payload
 class TransactionPayload(BaseModel):
     transaction_id: str
     amount: float
@@ -122,11 +120,11 @@ class TransactionPayload(BaseModel):
     transaction_type: str
     nameOrig: str
 
-# =============================================
-# 8. POST /predict (fast, no SHAP)
-# =============================================
+# 8. POST /v1/predict
+
 @main.post("/v1/predict")
 async def predict_transaction(payload: TransactionPayload):
+    print("PREDICT ENDPOINT EXECUTING (VERSION 2)") 
     if model is None or scaler is None:
         raise HTTPException(500, "Model not loaded.")
 
@@ -155,27 +153,30 @@ async def predict_transaction(payload: TransactionPayload):
     prob = float(model.predict_proba(X_scaled)[0, 1])
     action = "BLOCKED" if prob >= THRESHOLD else "APPROVED"
 
-    # Save to DB
+    # Save to DB (include velocity_1m and avg_amount_1h)
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cur = conn.cursor()
+        print(f"Storing: velocity_1m={velocity_1m}, avg_amount_1h={avg_amount_1h}")
         cur.execute("""
-            INSERT INTO predictions (
-                transaction_id, fraud_probability, account_number,
-                amount, action, threshold_used,
-                oldbalanceorg, oldbalancedest, step, transaction_type
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            payload.transaction_id, round(prob, 4), payload.nameOrig,
-            payload.amount, action, THRESHOLD,
-            payload.oldbalanceOrg, payload.oldbalanceDest,
-            payload.step, payload.transaction_type
-        ))
+    INSERT INTO predictions (
+        transaction_id, fraud_probability, account_number,
+        amount, action, threshold_used,
+        oldbalanceorg, oldbalancedest, step, transaction_type,
+        velocity_1m, avg_amount_1h
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+""", (
+    payload.transaction_id, round(prob, 4), payload.nameOrig,
+    payload.amount, action, THRESHOLD,
+    payload.oldbalanceOrg, payload.oldbalanceDest,
+    payload.step, payload.transaction_type,
+    velocity_1m, avg_amount_1h
+))
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"⚠️ DB insert failed: {e}")
+        print(f"DB insert failed: {e}")
 
     # Send to Kafka
     result = {
@@ -190,7 +191,7 @@ async def predict_transaction(payload: TransactionPayload):
         kafka_producer.produce('fraud_results', value=json.dumps(result).encode('utf-8'), callback=delivery_report)
         kafka_producer.flush()
     except Exception as e:
-        print(f"⚠️ Kafka produce failed: {e}")
+        print(f"Kafka produce failed: {e}")
 
     return {
         "transaction_id": payload.transaction_id,
@@ -204,9 +205,8 @@ async def predict_transaction(payload: TransactionPayload):
         }
     }
 
-# =============================================
 # 9. Health
-# =============================================
+
 @main.get("/v1/health")
 async def health():
     return {
@@ -218,9 +218,8 @@ async def health():
         "shap_loaded": explainer is not None
     }
 
-# =============================================
-# 10. SHAP helper (human-readable explanation)
-# =============================================
+# 10. SHAP helper
+
 def get_explanation(amount, oldbalanceorg, oldbalancedest, step, transaction_type, action,
                     velocity_1m=0, avg_amount_1h=0.0):
     """Return a plain‑English reason using SHAP contributions and raw values."""
@@ -228,7 +227,6 @@ def get_explanation(amount, oldbalanceorg, oldbalancedest, step, transaction_typ
         return "Explanation unavailable."
 
     try:
-        # ---- Normalise inputs ----
         amount = float(amount or 0.0)
         oldbalanceorg = float(oldbalanceorg or 0.0)
         oldbalancedest = float(oldbalancedest or 0.0)
@@ -238,7 +236,6 @@ def get_explanation(amount, oldbalanceorg, oldbalancedest, step, transaction_typ
         hour_of_day = step % 24
         type_is_transfer = 1 if transaction_type.upper() == "TRANSFER" else 0
 
-        # ---- Build feature vector ----
         if n_features == 5:
             features = [amount, oldbalanceorg, oldbalancedest, hour_of_day, type_is_transfer]
             names = ['amount', 'sender balance', 'recipient balance', 'time of day', 'transfer type']
@@ -251,16 +248,13 @@ def get_explanation(amount, oldbalanceorg, oldbalancedest, step, transaction_typ
             raw_values = [amount, oldbalanceorg, oldbalancedest, hour_of_day, type_is_transfer,
                           velocity_1m, avg_amount_1h]
 
-        # ---- Get SHAP contributions ----
         X_scaled = scaler.transform([features])
         shap_values = explainer.shap_values(X_scaled)
         contrib = shap_values[1][0] if isinstance(shap_values, list) else shap_values[0]
 
-        # ---- Pair and sort ----
         pairs = list(zip(names, contrib, raw_values))
         pairs_sorted = sorted(pairs, key=lambda x: abs(x[1]), reverse=True)
 
-        # ---- Build description ----
         if action == "BLOCKED":
             drivers = [(name, c, val) for name, c, val in pairs_sorted if c > 0]
             if not drivers:
@@ -312,9 +306,8 @@ def get_explanation(amount, oldbalanceorg, oldbalancedest, step, transaction_typ
     except Exception as e:
         return f"Explanation error: {str(e)}"
 
-# =============================================
-# 11. GET endpoints
-# =============================================
+# 11. GET endpoints (with behavioural features)
+
 
 @main.get("/v1/account/{nameOrig}/transactions")
 async def get_account_transactions(nameOrig: str, limit: int = 10):
@@ -323,7 +316,8 @@ async def get_account_transactions(nameOrig: str, limit: int = 10):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT transaction_id, fraud_probability, amount, action, created_at,
-                   oldbalanceorg, oldbalancedest, step, transaction_type
+                   oldbalanceorg, oldbalancedest, step, transaction_type,
+                   velocity_1m, avg_amount_1h
             FROM predictions
             WHERE account_number = %s
             ORDER BY created_at DESC
@@ -344,8 +338,8 @@ async def get_account_transactions(nameOrig: str, limit: int = 10):
                 row['step'],
                 row['transaction_type'],
                 row['action'],
-                velocity_1m=0,
-                avg_amount_1h=0.0
+                velocity_1m=row.get('velocity_1m', 0),
+                avg_amount_1h=row.get('avg_amount_1h', 0.0)
             )
             response.append({
                 "transaction_id": row['transaction_id'],
@@ -366,7 +360,8 @@ async def get_last_transaction(nameOrig: str):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT transaction_id, fraud_probability, amount, action, created_at,
-                   oldbalanceorg, oldbalancedest, step, transaction_type
+                   oldbalanceorg, oldbalancedest, step, transaction_type,
+                   velocity_1m, avg_amount_1h
             FROM predictions
             WHERE account_number = %s
             ORDER BY created_at DESC
@@ -384,8 +379,8 @@ async def get_last_transaction(nameOrig: str):
             row['step'],
             row['transaction_type'],
             row['action'],
-            velocity_1m=0,
-            avg_amount_1h=0.0
+            velocity_1m=row.get('velocity_1m', 0),
+            avg_amount_1h=row.get('avg_amount_1h', 0.0)
         )
         return {
             "account": nameOrig,

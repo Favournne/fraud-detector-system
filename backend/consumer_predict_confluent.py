@@ -10,7 +10,7 @@ import json
 import joblib
 import pandas as pd
 import psycopg2
-import redis  # <-- ADD
+import redis
 from confluent_kafka import Consumer, Producer, KafkaError
 
 
@@ -23,7 +23,7 @@ DB_CONFIG = {
 }
 
 
-# ---- PATHS ----
+# PATHS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.path.dirname(BASE_DIR), "data_")
 
@@ -42,7 +42,7 @@ n_features = scaler.n_features_in_ if hasattr(scaler, "n_features_in_") else 5
 print(f"Model loaded. Threshold: {THRESHOLD}")
 print(f"   Model expects {n_features} features.")
 
-# ---- Redis Connection (for user context) ----
+# Redis Connection (for user context) 
 try:
     r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
     r.ping()
@@ -51,7 +51,7 @@ except Exception as e:
     print(f"Redis unavailable: {e}")
     r = None
 
-# ---- Kafka Consumer ----
+# Kafka Consumer
 consumer_conf = {
     'bootstrap.servers': '127.0.0.1:9092',
     'group.id': 'fraud-detection-group',
@@ -62,11 +62,10 @@ consumer_conf = {
 consumer = Consumer(consumer_conf)
 consumer.subscribe(['transactions'])
 
-# ---- Kafka Producer ----
+# Kafka Producer
 producer_conf = {'bootstrap.servers': '127.0.0.1:9092'}
 producer = Producer(producer_conf)
 
-#
 print("Listening for transactions... (press Ctrl+C to stop)")
 try:
     while True:
@@ -80,7 +79,7 @@ try:
 
         tx = json.loads(msg.value().decode('utf-8'))
 
-        # ---- 1. Fetch Redis context (velocity, avg) ----
+        #  Fetch Redis context (velocity, avg) 
         velocity_1m = 0
         avg_amount_1h = 0.0
         user = tx.get('nameOrig', tx.get('account_number', 'UNKNOWN'))
@@ -94,11 +93,11 @@ try:
                 except:
                     pass
 
-        # ---- 2. Feature Engineering ----
+        #  Feature Engineering 
         hour_of_day = tx.get('step', 0) % 24
         type_is_transfer = 1 if tx.get('transaction_type', '').upper() == "TRANSFER" else 0
 
-        # ---- 3. Build feature vector ----
+        #  Build feature vector 
         if n_features == 5:
             input_data = pd.DataFrame([[
                 tx['amount'],
@@ -135,7 +134,7 @@ try:
         prob = float(model.predict_proba(X_scaled)[0, 1])
         action = "BLOCKED" if prob >= THRESHOLD else "APPROVED"
 
-        # ---- 4. Prepare result ----
+        #  Prepare result
         result = {
             "transaction_id": tx['transaction_id'],
             "fraud_probability": round(prob, 4),
@@ -145,33 +144,36 @@ try:
             "threshold_used": THRESHOLD
         }
 
-        # ---- 5. Insert into PostgreSQL (including raw features for SHAP) ----
+        # Insert into PostgreSQL (including behavioural features) -
         try:
             conn = psycopg2.connect(**DB_CONFIG)
             cur = conn.cursor()
             cur.execute("""
-                INSERT INTO predictions (
-                    transaction_id, fraud_probability, account_number,
-                    amount, action, threshold_used,
-                    oldbalanceOrg, oldbalanceDest, step, transaction_type
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                result['transaction_id'],
-                result['fraud_probability'],
-                result['account_number'],
-                result['amount'],
-                result['action'],
-                result['threshold_used'],
-                tx.get('oldbalanceOrg', 0.0),
-                tx.get('oldbalanceDest', 0.0),
-                tx.get('step', 0),
-                tx.get('transaction_type', 'UNKNOWN')
-            ))
+    INSERT INTO predictions (
+        transaction_id, fraud_probability, account_number,
+        amount, action, threshold_used,
+        oldbalanceOrg, oldbalanceDest, step, transaction_type,
+        velocity_1m, avg_amount_1h
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+""", (
+    result['transaction_id'],
+    result['fraud_probability'],
+    result['account_number'],
+    result['amount'],
+    result['action'],
+    result['threshold_used'],
+    tx.get('oldbalanceOrg', 0.0),
+    tx.get('oldbalanceDest', 0.0),
+    tx.get('step', 0),
+    tx.get('transaction_type', 'UNKNOWN'),
+    velocity_1m,
+    avg_amount_1h
+))
             conn.commit()
             cur.close()
             conn.close()
         except Exception as e:
-            print(f"⚠️ DB insert failed: {e}")
+            print(f"DB insert failed: {e}")
 
         # ---- 6. Send to fraud_results ----
         producer.produce('fraud_results', value=json.dumps(result).encode('utf-8'))

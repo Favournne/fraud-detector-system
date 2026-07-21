@@ -8,6 +8,8 @@ venv/
 *.db-journal
 *.csv
 data/
+data_/paysim.csv
+data_/splits/*.csv
 feature_repository/data/
 .streamlit/
 .vscode/
